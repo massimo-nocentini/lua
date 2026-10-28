@@ -1,0 +1,13 @@
+# Part of the WebAssembly/Docker port of Lua; same license as Lua (see the Copyright Notice in lua.h).
+# The image needs only the sources, the makefile and testes/: nothing
+# reads .git, the port's own files and the manual are not built, and
+# objects, libraries and a lua left by a local build would make make
+# skip the clang build
+.git/
+.github/
+emscripten/
+manual/
+**/*.o
+**/*.so
+**/*.a
+lua

@@ -1,0 +1,222 @@
+# Docker images of Lua for linux/amd64 and linux/arm64, compiled and
+# linked with clang (see .github/docker/Dockerfile), pushed to
+# ghcr.io/<owner>/<repo>:master, :master-<rev> (the first 8 characters
+# of the commit) and :latest, which is the same image as :master.
+# Part of the WebAssembly/Docker port of Lua; same license as Lua (see the Copyright Notice in lua.h).
+#
+# Each platform is built natively on its own runner (ubuntu-24.04 and
+# ubuntu-24.04-arm), not under QEMU: the build stage runs the upstream
+# test suite and the final stage a smoke test, so both run on real
+# hardware of each architecture, and the arm64 leg is what checks the
+# suite's small C stack on larger frames.  Each leg pushes its image by
+# digest only, untagged; the merge job then joins the two digests in
+# one multi-platform manifest and gives it the tags, so a tag never
+# points at a half-built pair (it refuses to tag fewer digests than
+# platforms, as after a late re-run of one failed leg whose partner's
+# digest has expired).  :master-<rev> is always set; :master and :latest
+# move only while the run's commit is still master's head, so a re-run
+# or a slow run for an older revision never moves them back.
+#
+# master is the only branch and carries this workflow, so a push to it
+# (including a sync with upstream) builds it.  The daily schedule builds
+# master only when its revision has no image yet: it catches revisions
+# whose push did not start a run (a push made with GITHUB_TOKEN starts
+# none) or whose run failed, and costs one registry lookup otherwise.
+# workflow_dispatch always builds master (run from another branch, it
+# does nothing).  A pull request to master that touches the image's
+# inputs builds linux/amd64 without pushing or logging in, so the suite
+# and the smoke test are checked before the change reaches master; it
+# reads master's build cache but never writes it.
+name: Docker images
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+    paths:
+      - .github/docker/**
+      - .github/workflows/docker.yml
+      - '*.c'
+      - '*.h'
+      - makefile
+      - testes/**
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+
+concurrency:
+  # A group keeps one pending run, and a newer one cancels it, so each
+  # push to master has a group of its own (its commit): every pushed
+  # revision gets its :master-<rev> image, and the merge job's head check
+  # keeps the moving tags right when such runs overlap.  A newer push to
+  # a pull request supersedes its check.
+  group: docker-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build linux/amd64 (no push)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: .github/docker/Dockerfile
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha,scope=master-amd64
+
+  plan:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    # it only looks the revision up in the registry
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      image: ${{ steps.plan.outputs.image }}
+      rev: ${{ steps.plan.outputs.rev }}
+      build: ${{ steps.plan.outputs.build }}
+    steps:
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Decide whether this revision needs an image
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          # ghcr names must be lower case; the owner may not be
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          rev=$(echo "$GITHUB_SHA" | cut -c1-8)
+          build=true
+          # a push or a request always builds; the schedule only fills gaps
+          if [ "$EVENT" = schedule ] &&
+             docker buildx imagetools inspect "$image:master-$rev" >/dev/null 2>&1; then
+            echo "master is at $rev, which already has an image"
+            build=false
+          fi
+          echo "image=$image" >>"$GITHUB_OUTPUT"
+          echo "rev=$rev" >>"$GITHUB_OUTPUT"
+          echo "build=$build" >>"$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { name: linux/amd64, arch: amd64, runner: ubuntu-24.04 }
+          - { name: linux/arm64, arch: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The Dockerfile's final stage is the smoke test, so a pushed
+      # digest is one whose test passed on its own architecture
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: .github/docker/Dockerfile
+          platforms: ${{ matrix.platform.name }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=Lua (master)
+          outputs: type=image,name=${{ needs.plan.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=master-${{ matrix.platform.arch }}
+          cache-to: type=gha,mode=max,scope=master-${{ matrix.platform.arch }}
+
+      - name: Record the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ matrix.platform.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          # long enough for "Re-run failed jobs" after a flake of one leg
+          retention-days: 7
+
+  merge:
+    needs: [plan, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create the multi-platform tags
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          IMAGE: ${{ needs.plan.outputs.image }}
+          REV: ${{ needs.plan.outputs.rev }}
+        run: |
+          # one file per platform, named by its digest; all of them, or
+          # the tags would name an image missing a platform
+          platforms=2  # the build matrix
+          refs=()
+          for d in *; do [ -e "$d" ] && refs+=("$IMAGE@sha256:$d"); done
+          if [ "${#refs[@]}" -ne "$platforms" ]; then
+            echo "::error::expected $platforms platform digests, got ${#refs[@]}: ${refs[*]}"
+            exit 1
+          fi
+          # :master and :latest only for master's head (read now: a newer
+          # push may have landed while this run built)
+          head=$(git ls-remote "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" refs/heads/master | cut -f1)
+          if [ -z "$head" ]; then echo "::error::could not read master's head"; exit 1; fi
+          tags=(-t "$IMAGE:master-$REV")
+          if [ "$head" = "$GITHUB_SHA" ]; then
+            tags+=(-t "$IMAGE:master" -t "$IMAGE:latest")
+          else
+            echo "::notice::master is at ${head:0:8} now, not at $REV: :master and :latest are left as they are"
+          fi
+          docker buildx imagetools create "${tags[@]}" "${refs[@]}"
+          docker buildx imagetools inspect "$IMAGE:master-$REV"
