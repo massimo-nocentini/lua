@@ -82,7 +82,7 @@ RUN apt-get update \
 WORKDIR /src
 COPY . .
 RUN set -eu; \
-    make -j"$(nproc)" CC=clang CWARNGCC= \
+    make CC=clang CWARNGCC= \
          MYCFLAGS="\$(LOCAL) -std=c99 -DLUA_USE_LINUX -fPIC -DLUA_USER_H='\".github/docker/lsystem.h\"'"; \
     make -C testes/libs CC=clang; \
     (cd testes && ulimit -S -s 1100 && : | ../lua -W all.lua); \
