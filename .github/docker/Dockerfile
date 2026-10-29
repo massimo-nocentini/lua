@@ -17,6 +17,21 @@
 # leaves a warning-free build.  Nothing upstream is edited: the
 # makefile is driven only from the command line.
 #
+# MYCFLAGS is the makefile's own ($(LOCAL), -std=c99, -DLUA_USE_LINUX)
+# with two additions:
+#
+#   - -fPIC, so that liblua.a can be linked into shared objects too.
+#
+#   - LUA_USER_H, which lua.h includes, naming lsystem.h (beside this
+#     file): it defines l_system, os.execute's system(), to clear errno
+#     when system() succeeds.  Docker's and BuildKit's seccomp profiles
+#     refuse clone3 with ENOSYS; glibc's system() then falls back to
+#     clone and runs the command, but leaves errno at ENOSYS, and
+#     luaL_execresult takes a nonzero status with a nonzero errno for a
+#     failure of system() itself: os.execute("exit 3") would return
+#     nil, "Function not implemented", 38 (and files.lua would fail,
+#     where it compares os.execute with io.popen).
+#
 # The makefile has no install target, so the build stage installs by
 # hand what an installed Lua has: lua, liblua.a and the four public
 # headers.  This tree has no luac.c, hence no luac, and no lua.pc.
@@ -57,14 +72,8 @@
 # entry of their own, so the check looks for clang's entry rather than
 # for the absence of gcc's.
 
-# ubuntu:24.04 is multi-platform: each build pulls its own platform's
-# image.  It is pinned, not :latest: on 26.04 (glibc 2.43) files.lua
-# fails under Docker's default seccomp profile, which answers clone3
-# with ENOSYS.  glibc's system() then falls back to clone and succeeds,
-# but leaves errno at ENOSYS, and luaL_execresult, seeing a nonzero
-# status with a nonzero errno, makes os.execute("exit 3") return
-# nil, "Function not implemented", 38 where io.popen gives the exit.
-ARG BASE=ubuntu:24.04
+# ubuntu:latest is multi-platform: each build pulls its own platform's image
+ARG BASE=ubuntu:latest
 
 FROM ${BASE} AS build
 RUN apt-get update \
@@ -73,7 +82,8 @@ RUN apt-get update \
 WORKDIR /src
 COPY . .
 RUN set -eu; \
-    make -j"$(nproc)" CC=clang CWARNGCC=; \
+    make -j"$(nproc)" CC=clang CWARNGCC= \
+         MYCFLAGS="\$(LOCAL) -std=c99 -DLUA_USE_LINUX -fPIC -DLUA_USER_H='\".github/docker/lsystem.h\"'"; \
     make -C testes/libs CC=clang; \
     (cd testes && ulimit -S -s 1100 && : | ../lua -W all.lua); \
     install -d /out/usr/local/bin /out/usr/local/include /out/usr/local/lib \
