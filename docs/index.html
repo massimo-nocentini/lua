@@ -1,0 +1,615 @@
+<!doctype html>
+<!-- index.html - the Lua console and notebook page (WebAssembly)
+
+  Part of the WebAssembly/Docker port of Lua; same license as Lua (see the Copyright Notice in lua.h).
+-->
+
+<!-- The page runs the unmodified Lua core and libraries, with the console
+  of webrepl-main.c (a port of lua.c's REPL), in a Web Worker
+  (repl-worker.js); repl.js drives it and owns this shell: the tabs, the
+  Console, the Settings and the choice of build.  The Notebook tab is
+  notebook.js's (with notebook-lib.js, notebook.css and the kernel client
+  nb-kernel.js): it builds its own toolbar and panel inside #nb-toolbar
+  and #nb-panel, and runs a second worker of its own.
+
+  The build rule (make -C emscripten web) replaces the BUILD placeholder
+  (in the lua-build meta tag and the URLs below) with a build id, which
+  the page passes as ?v= on every script, worker and .wasm URL; the ARCH,
+  EH and BUILDS ones with the builds the page has (WASM_WEB_ARCHS), of
+  which repl.js picks one; and VERSION with Lua's release.  No external
+  resources: everything is in the bundle, so it works offline, but it must
+  be served over plain HTTP (make -C emscripten serve), not from file://.
+
+  The theme tokens on :root live in #page-style; notebook.css uses them,
+  and the notebook's static .html export copies the rules of #page-style
+  and #nb-style. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'">
+<meta name="description" content="Lua 5.5 running in your browser, compiled to WebAssembly.">
+<meta name="lua-build" content="3189e80-668929630">
+<meta name="lua-wasm-arch" content="wasm64">
+<meta name="lua-wasm-eh" content="exnref">
+<meta name="lua-wasm-builds" content="wasm64:exnref wasm32:legacy">
+<meta name="lua-version" content="5.5.1">
+<title>Lua console</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='29' cy='35' r='21' fill='%2300007f'/%3E%3Ccircle cx='37' cy='27' r='6.5' fill='%23fff'/%3E%3Ccircle cx='52' cy='12' r='6.5' fill='%2300007f'/%3E%3C/svg%3E">
+<style id="page-style">
+:root {
+  --bg: #f4f5f9;
+  --surface: #ffffff;
+  --surface-2: #eceef5;
+  --border: #d8dbe5;
+  --fg: #1a1c24;
+  --muted: #5b6072;
+  --accent: #00007f;
+  --accent-strong: #00005c;
+  --accent-soft: #e6e8fa;
+  --on-accent: #ffffff;
+  --focus: #2563eb;
+  --term-bg: #fcfcfe;
+  --term-fg: #1f2230;
+  --term-err: #b42318;
+  --term-in: #26318f;
+  --term-note: #5b6072;
+  --term-prompt: #868b9c;
+  --ok: #15803d;
+  --busy: #b45309;
+  --wait: #1d4ed8;
+  --sleep: #7c3aed;
+  --bad: #b42318;
+  --syn-comment: #666b7c;
+  --syn-string: #3a7018;
+  --syn-special: #00007f;
+  --syn-number: #a12f62;
+  --syn-constant: #7a3fb8;
+  --syn-keyword: #0d6d64;
+  --syn-quote: #2a6590;
+  --syn-paren: #5c6070;
+  --shadow: 0 1px 2px rgb(10 14 40 / .06), 0 4px 16px rgb(10 14 40 / .06);
+  --radius: 10px;
+  --mono: ui-monospace, "Noto Sans Mono", "Noto Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+  /* the names chicken's stylesheets use, for code ported from them */
+  --text: var(--fg);
+  --term-sys: var(--term-note);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1117;
+    --surface: #171a22;
+    --surface-2: #20242e;
+    --border: #2e3340;
+    --fg: #e6e8ef;
+    --muted: #9ba1b1;
+    --accent: #9aa4ff;
+    --accent-strong: #b9bfff;
+    --accent-soft: #1d2142;
+    --on-accent: #0b0d1a;
+    --focus: #7aa7ff;
+    --term-bg: #0b0d12;
+    --term-fg: #e3e6ee;
+    --term-err: #ff8a80;
+    --term-in: #b9bfff;
+    --term-note: #9ba1b1;
+    --term-prompt: #828899;
+    --ok: #4ade80;
+    --busy: #fbbf24;
+    --wait: #7aa7ff;
+    --sleep: #c4a5ff;
+    --bad: #ff8a80;
+    --syn-comment: #8d93a3;
+    --syn-string: #a8cc7a;
+    --syn-special: #9aa4ff;
+    --syn-number: #f28db2;
+    --syn-constant: #c4a5ff;
+    --syn-keyword: #5ccfbf;
+    --syn-quote: #82b8e8;
+    --syn-paren: #9ba1b1;
+    --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 6px 20px rgb(0 0 0 / .3);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1117;
+  --surface: #171a22;
+  --surface-2: #20242e;
+  --border: #2e3340;
+  --fg: #e6e8ef;
+  --muted: #9ba1b1;
+  --accent: #9aa4ff;
+  --accent-strong: #b9bfff;
+  --accent-soft: #1d2142;
+  --on-accent: #0b0d1a;
+  --focus: #7aa7ff;
+  --term-bg: #0b0d12;
+  --term-fg: #e3e6ee;
+  --term-err: #ff8a80;
+  --term-in: #b9bfff;
+  --term-note: #9ba1b1;
+  --term-prompt: #828899;
+  --ok: #4ade80;
+  --busy: #fbbf24;
+  --wait: #7aa7ff;
+  --sleep: #c4a5ff;
+  --bad: #ff8a80;
+  --syn-comment: #8d93a3;
+  --syn-string: #a8cc7a;
+  --syn-special: #9aa4ff;
+  --syn-number: #f28db2;
+  --syn-constant: #c4a5ff;
+  --syn-keyword: #5ccfbf;
+  --syn-quote: #82b8e8;
+  --syn-paren: #9ba1b1;
+  --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 6px 20px rgb(0 0 0 / .3);
+  color-scheme: dark;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.5 var(--sans);
+  -webkit-text-size-adjust: 100%;
+}
+[hidden] { display: none !important; }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+.app {
+  height: 100vh;
+  height: 100dvh;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 max(16px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  display: flex;
+  flex-direction: column;
+}
+
+/* header */
+.top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: max(14px, env(safe-area-inset-top)) 0 10px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+.brand svg { width: 34px; height: 34px; flex: none; }
+.brand > div { min-width: 0; }
+.brand .planet, .brand .moon { fill: var(--accent); }
+.brand .hole { fill: var(--bg); }
+.brand .orbit { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 3.5 3.5; opacity: .7; }
+.brand h1 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -.01em; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.brand h1 .sep { color: var(--muted); font-weight: 400; }
+.brand p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.top .grow { flex: 1; }
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  padding: 4px 11px 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.pill .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--muted);
+}
+.pill[data-state="ready"] .dot { background: var(--ok); }
+/* an unfinished statement is held (Stop discards it): ready, in --wait */
+.pill[data-state="continue"] .dot { background: var(--wait); }
+.pill[data-state="running"] .dot { background: var(--busy); animation: pulse 1s ease-in-out infinite; }
+.pill[data-state="waiting"] .dot { background: var(--wait); box-shadow: 0 0 0 2px color-mix(in srgb, var(--wait) 30%, transparent); }
+.pill[data-state="sleeping"] .dot { background: var(--sleep); animation: pulse 2s ease-in-out infinite; }
+.pill[data-state="loading"] .dot { animation: pulse 1s ease-in-out infinite; }
+.pill[data-state="exited"] .dot, .pill[data-state="error"] .dot { background: var(--bad); }
+.pill[data-state="ready"], .pill[data-state="continue"] { color: var(--fg); }
+@keyframes pulse { 50% { opacity: .3; } }
+/* the build running, on a page with several (repl.js) */
+.arch {
+  flex: none;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+@media (prefers-reduced-motion: reduce) { .pill .dot { animation: none !important; } }
+
+/* tabs and toolbars */
+/* too narrow for one row: the toolbar moves up to a row of its own, and
+   the tabs stay on the bottom border */
+.bar {
+  display: flex;
+  flex-wrap: wrap-reverse;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+}
+[role="tablist"] { display: flex; gap: 4px; }
+[role="tab"] {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: 8px 12px 9px;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-weight: 550;
+  font-size: 14px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+[role="tab"]:hover { color: var(--fg); }
+[role="tab"][aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
+
+.toolbar { display: flex; gap: 4px; padding-bottom: 5px; margin-left: auto; min-width: 0; }
+.btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 13.5px;
+  font-weight: 520;
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: none;
+  transition: background-color .12s, border-color .12s;
+}
+.btn:hover { background: var(--surface-2); }
+.btn:disabled, .btn[aria-disabled="true"] { opacity: .45; cursor: default; }
+.btn svg { width: 16px; height: 16px; flex: none; }
+.btn.ghost { border-color: transparent; background: none; }
+.btn.ghost:hover { background: var(--surface-2); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+.btn.primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
+.btn.danger svg { color: var(--bad); }
+
+main { flex: 1; min-height: 0; display: flex; flex-direction: column; padding-top: 12px; }
+.panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+/* the console */
+.console {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--term-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.console.drop { outline: 2px dashed var(--accent); outline-offset: -6px; }
+#term {
+  flex: 1;
+  min-height: 8rem;
+  margin: 0;
+  padding: 14px 16px 6px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  color: var(--term-fg);
+  font: 13.5px/1.55 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 8;
+  overscroll-behavior: contain;
+}
+#term:focus-visible { outline-offset: -3px; }
+#term .err { color: var(--term-err); }
+#term .in { color: var(--term-in); }
+#term .p { color: var(--term-prompt); }
+#term .sys { color: var(--term-note); font-style: italic; }
+#term .loading { color: var(--term-note); }
+/* the echoed input's colors (notebook-lib.js's highlighter) */
+.syn-comment { color: var(--syn-comment); }
+.syn-string { color: var(--syn-string); }
+.syn-special { color: var(--syn-special); }
+.syn-number { color: var(--syn-number); }
+.syn-constant { color: var(--syn-constant); }
+.syn-keyword { color: var(--syn-keyword); }
+.syn-quote { color: var(--syn-quote); }
+.syn-paren { color: var(--syn-paren); }
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 12px 10px;
+  padding: 8px 10px 8px 12px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--fg);
+  font-size: 13.5px;
+}
+.notice span { flex: 1; min-width: 12ch; }
+
+.entry {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 8px 8px 8px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+.entry .caret {
+  align-self: flex-start;
+  padding-top: 7px;
+  color: var(--accent);
+  font: 600 14px/1.5 var(--mono);
+  user-select: none;
+}
+#line {
+  flex: 1;
+  min-width: 0;
+  min-height: 36px;
+  max-height: 40vh;
+  padding: 7px 4px;
+  border: 0;
+  background: none;
+  color: var(--term-fg);
+  font: 14px/1.5 var(--mono);
+  resize: none;
+  outline: none;
+}
+#line::placeholder { color: var(--muted); opacity: .8; }
+.entry:focus-within { box-shadow: inset 0 2px 0 -1px var(--accent); }
+.entry .btn { min-height: 36px; }
+.entry .hist { padding: 0 8px; }
+.hints {
+  margin: 8px 2px 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+kbd {
+  display: inline-block;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--surface);
+  font: 11.5px/1.5 var(--mono);
+}
+code { font-family: var(--mono); font-size: .92em; }
+
+/* shared with the notebook: text fields, code boxes, disclosure */
+.input {
+  min-height: 34px;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 13.5px;
+}
+.codebox {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--term-bg);
+  color: var(--term-fg);
+  font: 12.5px/1.5 var(--mono);
+  white-space: pre;
+}
+.codebox.log { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 30vh; }
+details > summary { cursor: pointer; font-weight: 600; font-size: 13.5px; margin-bottom: 6px; }
+
+/* dialogs (the Settings here, the notebook's own) */
+dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--fg);
+  box-shadow: 0 24px 64px rgb(0 0 0 / .3);
+}
+dialog::backdrop { background: rgb(8 10 24 / .45); }
+dialog form { display: flex; flex-direction: column; gap: 14px; padding: 20px; }
+dialog h2 { margin: 0; font-size: 17px; }
+dialog label.f { display: flex; flex-direction: column; gap: 5px; font-weight: 600; font-size: 13.5px; }
+dialog .help { font-weight: 400; color: var(--muted); font-size: 12.5px; }
+dialog textarea.input { min-height: 7rem; font-family: var(--mono); resize: vertical; }
+dialog input.input { font-family: var(--mono); }
+dialog .row { display: flex; gap: 14px; flex-wrap: wrap; }
+dialog .row > * { flex: 1 1 10rem; min-width: 0; }
+dialog fieldset { border: 0; margin: 0; padding: 0; display: flex; gap: 6px 14px; flex-wrap: wrap; font-size: 13.5px; }
+dialog legend { font-weight: 600; margin-bottom: 5px; padding: 0; }
+dialog .check { display: flex; gap: 8px; align-items: flex-start; font-size: 13.5px; }
+dialog .check input, dialog fieldset input { accent-color: var(--accent); }
+dialog fieldset .help { flex-basis: 100%; }
+dialog .actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding-top: 4px; }
+
+@media (max-width: 640px) {
+  .top { gap: 8px; }
+  .brand p, .brand h1 .tail { display: none; }
+  .toolbar .label { display: none; }
+  .toolbar .btn { padding: 0 9px; }
+  [role="tab"] { padding: 8px 8px 9px; }
+  .hints { display: none; }
+  #term { padding: 10px 12px 4px; font-size: 13px; }
+  dialog form { padding: 16px; }
+}
+@media (max-width: 380px) {
+  .brand h1 { font-size: 15.5px; }
+  .brand svg { width: 30px; height: 30px; }
+  /* the build is in the Settings too */
+  .top .arch { display: none; }
+  .toolbar { gap: 2px; }
+  .toolbar .btn { padding: 0 7px; min-height: 32px; }
+  [role="tab"] { padding: 8px 6px 9px; font-size: 13.5px; }
+  .entry { padding-left: 8px; }
+  .entry .hist { padding: 0 6px; }
+}
+@media (hover: none) and (pointer: coarse) {
+  .hints { display: none; }
+}
+@media (hover: hover) and (pointer: fine) {
+  .entry .hist { display: none; }
+}
+@media (forced-colors: active) {
+  .pill .dot { forced-color-adjust: none; }
+}
+</style>
+<link rel="stylesheet" id="nb-style" href="notebook.css?v=3189e80-668929630">
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <a class="brand" href="https://www.lua.org/" title="www.lua.org">
+      <svg viewBox="0 0 64 64" aria-hidden="true">
+        <circle class="orbit" cx="29" cy="35" r="27"/>
+        <circle class="planet" cx="29" cy="35" r="20"/>
+        <circle class="hole" cx="36.5" cy="27.5" r="6"/>
+        <circle class="moon" cx="48.1" cy="15.9" r="6"/>
+      </svg>
+      <div>
+        <h1>Lua <span id="brand-version">5.5.1</span><span class="tail"> <span class="sep">·</span> WebAssembly</span></h1>
+        <p>the Lua interpreter, compiled to WebAssembly, running in your browser</p>
+      </div>
+    </a>
+    <span class="grow"></span>
+    <span id="arch" class="arch" hidden></span>
+    <span id="status" class="pill" data-state="loading" role="status" aria-live="polite">
+      <span class="dot" aria-hidden="true"></span><span id="status-text">loading</span>
+    </span>
+  </header>
+
+  <div class="bar">
+    <div role="tablist" aria-label="Views">
+      <button role="tab" id="tab-console" aria-controls="panel-console" aria-selected="true" type="button">Console</button>
+      <button role="tab" id="tab-notebook" aria-controls="nb-panel" aria-selected="false" tabindex="-1" type="button">Notebook</button>
+    </div>
+    <div class="toolbar" role="toolbar" aria-label="Console controls" id="toolbar">
+      <button class="btn ghost danger" id="stop" type="button" aria-label="Stop" title="Stop the running code (Esc)" disabled>
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg><span class="label">Stop</span>
+      </button>
+      <button class="btn ghost" id="restart" type="button" aria-label="Restart" title="Start a fresh interpreter">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg><span class="label">Restart</span>
+      </button>
+      <button class="btn ghost" id="clear" type="button" aria-label="Clear" title="Clear the terminal (Ctrl+L)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/></svg><span class="label">Clear</span>
+      </button>
+      <button class="btn ghost" id="upload-btn" type="button" aria-label="Upload files" title="Copy files into the interpreter's home directory">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V3"/><path d="M7 8l5-5 5 5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg><span class="label">Upload</span>
+      </button>
+      <input type="file" id="upload" multiple hidden>
+      <button class="btn ghost" id="settings-btn" type="button" aria-label="Settings" title="Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span class="label">Settings</span>
+      </button>
+    </div>
+    <!-- notebook.js builds the notebook's toolbar in here -->
+    <div class="toolbar nb-tb" role="toolbar" aria-label="Notebook controls" id="nb-toolbar" hidden></div>
+  </div>
+
+  <main>
+    <section class="panel" id="panel-console" role="tabpanel" aria-labelledby="tab-console">
+      <div class="console" id="console">
+        <pre id="term" role="log" aria-label="Console output" tabindex="0"><span class="loading">Loading the interpreter…</span></pre>
+        <div class="notice" id="notice" hidden>
+          <span id="notice-text"></span>
+          <button class="btn primary" id="notice-restart" type="button">Restart</button>
+        </div>
+        <form class="entry" id="entry" autocomplete="off">
+          <span class="caret" aria-hidden="true">›</span>
+          <label for="line" class="sr-only">Lua input</label>
+          <textarea id="line" rows="1" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="send" placeholder="Type a Lua statement or expression" disabled></textarea>
+          <button class="btn ghost hist" id="hist-up" type="button" aria-label="Previous input">↑</button>
+          <button class="btn ghost hist" id="hist-down" type="button" aria-label="Next input">↓</button>
+          <button class="btn primary" id="send" type="submit" disabled>Run</button>
+        </form>
+      </div>
+      <p class="hints"><kbd>Enter</kbd> runs, <kbd>Shift</kbd>+<kbd>Enter</kbd> adds a line, <kbd>Esc</kbd> or <kbd>Ctrl</kbd>+<kbd>C</kbd> stops, <kbd>Ctrl</kbd>+<kbd>D</kbd> ends input, <kbd>↑</kbd>/<kbd>↓</kbd> recall history. Uploaded files load with <code>dofile("name.lua")</code> or <code>require "name"</code>.</p>
+    </section>
+
+    <!-- notebook.js builds the notebook in here -->
+    <section class="panel" id="nb-panel" role="tabpanel" aria-labelledby="tab-notebook" hidden></section>
+  </main>
+</div>
+
+<dialog id="settings" aria-labelledby="settings-title">
+  <form method="dialog" id="settings-form">
+    <h2 id="settings-title">Settings</h2>
+    <label class="f" for="set-init">Init code
+      <span class="help">Lua code, or <code>@file</code> for an uploaded file: runs before the first prompt, like <code>LUA_INIT</code>. Empty means none.</span>
+      <textarea class="input" id="set-init" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" placeholder="inspect = function(t) for k, v in pairs(t) do print(k, v) end end"></textarea>
+    </label>
+    <div class="row">
+      <label class="f" for="set-args">Arguments
+        <span class="help">lua options, such as <code>-W -l mymod -e "x=1"</code>. Quote with <code>'…'</code> or <code>"…"</code>.</span>
+        <input class="input" id="set-args" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off">
+      </label>
+      <label class="f" for="set-slice">Time slice (ms)
+        <span class="help">How long Lua runs before letting the page update (5 to 1000).</span>
+        <input class="input" id="set-slice" type="number" min="5" max="1000" step="5">
+      </label>
+    </div>
+    <label class="check"><input type="checkbox" id="set-quotes">
+      <span>Straighten smart quotes<br><span class="help">Turns smart quotes typed by phone keyboards into straight ones. In a string opened with ‘ an apostrophe ends it: open such strings with a straight quote. On by default on touch devices.</span></span>
+    </label>
+    <fieldset>
+      <legend>Theme</legend>
+      <label><input type="radio" name="theme" value="auto"> System</label>
+      <label><input type="radio" name="theme" value="light"> Light</label>
+      <label><input type="radio" name="theme" value="dark"> Dark</label>
+    </fieldset>
+    <fieldset id="set-arch" hidden>
+      <legend>WebAssembly build</legend>
+      <label><input type="radio" name="arch" value="auto" id="set-arch-auto"> Automatic</label>
+      <label><input type="radio" name="arch" value="wasm64"> wasm64</label>
+      <label><input type="radio" name="arch" value="wasm32"> wasm32</label>
+      <span class="help" id="set-arch-help"></span>
+    </fieldset>
+    <div class="actions">
+      <button class="btn" value="cancel" type="submit" formnovalidate>Cancel</button>
+      <button class="btn primary" value="save" type="submit">Save and restart</button>
+    </div>
+  </form>
+</dialog>
+
+<noscript><p style="padding:16px">This page needs JavaScript and WebAssembly.</p></noscript>
+<script src="repl.js?v=3189e80-668929630"></script>
+<script src="notebook-lib.js?v=3189e80-668929630"></script>
+<script src="nb-kernel.js?v=3189e80-668929630"></script>
+<script src="notebook.js?v=3189e80-668929630"></script>
+</body>
+</html>
