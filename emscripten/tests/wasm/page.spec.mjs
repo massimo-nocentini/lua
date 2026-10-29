@@ -169,12 +169,24 @@ async function runTarget(browser, bname, target) {
     await waitSince(re, timeout);
     await waitPill('ready', timeout);
   }
+  // Saves the Settings dialog and resolves once the page has applied it.
+  // The dialog's close event, where the page stores the settings, sets
+  // the theme and restarts, is a task of its own (in Chromium it comes
+  // after the click resolves), so a waitPill('ready') right after the
+  // click could still see the old interpreter.  A listener added now
+  // runs after the page's own.  (A change of build reloads the page,
+  // which may end the wait first: the settings were applied then too.)
   async function settings(f) {
     await page.click('#settings-btn');
     await page.waitForSelector('#settings[open]');
     await f();
     await mark();
+    await page.evaluate(() => {
+      window.__settingsSaved = new Promise(r =>
+        document.getElementById('settings').addEventListener('close', () => r(), { once: true }));
+    });
     await page.click('#settings button[value="save"]');
+    await page.evaluate(() => window.__settingsSaved).catch(() => {});
   }
 
   await check(T + `P1 the page loads, runs ${target.arch} and the pill reaches ready within 30 s`, async () => {
