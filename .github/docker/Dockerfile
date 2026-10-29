@@ -57,8 +57,14 @@
 # entry of their own, so the check looks for clang's entry rather than
 # for the absence of gcc's.
 
-# ubuntu:latest is multi-platform: each build pulls its own platform's image
-ARG BASE=ubuntu:latest
+# ubuntu:24.04 is multi-platform: each build pulls its own platform's
+# image.  It is pinned, not :latest: on 26.04 (glibc 2.43) files.lua
+# fails under Docker's default seccomp profile, which answers clone3
+# with ENOSYS.  glibc's system() then falls back to clone and succeeds,
+# but leaves errno at ENOSYS, and luaL_execresult, seeing a nonzero
+# status with a nonzero errno, makes os.execute("exit 3") return
+# nil, "Function not implemented", 38 where io.popen gives the exit.
+ARG BASE=ubuntu:24.04
 
 FROM ${BASE} AS build
 RUN apt-get update \
