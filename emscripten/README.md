@@ -12,8 +12,8 @@ interfaces:
   output through the `notebook` module (HTML, SVG, Markdown, tables, images), export and import as `.lua`, `.json`
   and static `.html`.
 
-The deployed page is <https://massimo-nocentini.github.io/lua/> (GitHub Pages, from the `gh-pages` branch; see
-[Deployment](#deployment)). `deploy/README.txt` is the user's side of this file; it is copied into the bundle.
+The deployed page is <https://massimo-nocentini.github.io/lua/> (GitHub Pages, deployed by GitHub Actions;
+see [Deployment](#deployment)). `deploy/README.txt` is the user's side of this file; it is copied into the bundle.
 
 Nothing here changes an upstream file: Lua's own sources, `makefile`, `manual/` and `testes/` are compiled and run
 as they are, and every web-specific behaviour is installed at run time by the glue, which replaces library
@@ -192,19 +192,22 @@ tests those pages instead, and `PAGE_URL=http://localhost:8080/` tests a server 
    `build/web` plus `deploy/README.txt` and `deploy/serve.py`, and uploads it as the artifact
    `lua-wasm-web-<rev>`;
 2. **page**: runs `page.spec.mjs` on that artifact in Chromium and Firefox (and, informationally, WebKit);
-3. **deploy** (pushes to `master` only, after both): replaces the `gh-pages` branch with **one new commit** holding
-   the bundle in `docs/` (plus `docs/.nojekyll`), force-pushed with a lease. Its `Source:` trailer names the commit
-   of `master` it was built from; a run of an older commit than the one deployed (a re-run) deploys nothing, and so
-   does an identical bundle. It then asks GitHub Pages for a build.
+3. **deploy** (pushes to `master` only, after both): uploads the bundle as the Pages artifact
+   (`actions/upload-pages-artifact`) and deploys it with `actions/deploy-pages` to the `github-pages` environment;
+   the bundle is the root of the site. Each deployment records the commit of `master` it was built from; a run of an
+   older commit than the one deployed (a re-run) fails instead of replacing the newer site. One deploy runs at a
+   time, and one that started is never cancelled.
 
-**`gh-pages` is generated output.** Never edit it by hand: every deploy replaces the whole branch, so a change made
-there is lost. The page's sources are `emscripten/web/` (and the C glue here) on `master`; change them there.
+**The site is generated output.** No branch holds it, so there is nothing to edit by hand: every deploy replaces
+all of it with the workflow's Pages artifact. The page's sources are `emscripten/web/` (and the C glue here) on
+`master`; change them there.
 
 One-time setup, in the repository's Settings:
-- *Pages* › Build and deployment › Source: **Deploy from a branch**, branch **gh-pages**, folder **/docs** (the
-  branch exists after the first deploy);
-- *Actions* › General › Workflow permissions: the workflow asks for `contents: write` and `pages: write` itself, in
-  its deploy job only.
+- *Pages* › Build and deployment › Source: **GitHub Actions**;
+- *Environments* › `github-pages` › Deployment branches must allow `master` (Pages adds the default branch; check
+  it, since the environment predates the switch);
+- *Actions* › General › Workflow permissions: the workflow asks for what it needs itself: `pages: write` and
+  `id-token: write` (and `deployments: read`) in its deploy job only, and `contents: read` everywhere.
 
 ## Known issues
 

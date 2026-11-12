@@ -12,10 +12,11 @@ This directory is a generated copy of emscripten/build/web from
 which has two builds: wasm64 (64-bit WebAssembly) beside index.html,
 and wasm32 (32-bit) in wasm32/.  The page picks one when it loads.
 
-On the gh-pages branch (docs/) this directory is replaced by every
-deploy of the "WebAssembly bundle" workflow, which force-pushes a single
-new commit: never edit it there by hand, the change would be lost.  The
-sources are emscripten/web/ (and the C glue in emscripten/) on master.
+Deployed, this directory is the whole site on GitHub Pages: the
+"WebAssembly bundle" workflow uploads it as its Pages artifact, and
+every deploy replaces it.  It is generated: never edit a copy by hand.
+The sources are emscripten/web/ (and the C glue in emscripten/) on
+master.
 
 Run it locally
   1. In this directory run:   python3 serve.py        (or: python3 serve.py 9000)
